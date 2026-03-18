@@ -9,11 +9,10 @@ const PORT = 3000;
 
 // Configuration PostgreSQL
 const pool = new Pool({
-  host: process.env.DATABASE_HOST || 'postgres',
-  port: 5432,
-  user: 'neobank',
-  password: 'securepassword',
-  database: 'neobank_db',
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 // Middleware
