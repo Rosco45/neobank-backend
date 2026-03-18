@@ -16,7 +16,18 @@ const pool = new Pool({
 });
 
 // Middleware
-app.use(cors());
+
+// Configuration CORS pour permettre les requêtes depuis Vercel
+app.use(cors({
+  origin: [
+    'http://localhost:3001',  // Pour le développement local
+    'https://neobank-red.vercel.app/'  // ⚠️ Remplace par ton URL Vercel
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // Test de connexion à la base de données
