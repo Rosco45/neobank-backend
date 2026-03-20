@@ -23,6 +23,7 @@ app.use(cors({
     'http://localhost:3001',  // Pour le développement local
     'https://neobank-red.vercel.app/'  // ⚠️ Remplace par ton URL Vercel
   ],
+  origin: true,  // Autorise toutes les origines (⚠️ moins sécurisé)
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
