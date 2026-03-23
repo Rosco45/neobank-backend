@@ -1795,6 +1795,68 @@ app.get('/api/v1/admin/users/:id', authenticate, requireAdmin, async (req, res) 
       res.status(500).json({ error: 'Erreur serveur' });
     }
   });
+  // ============================================================================
+// GESTION DU RIB DE RECHARGE
+// ============================================================================
+
+// Obtenir le RIB de recharge (accessible à tous les utilisateurs connectés)
+app.get('/api/v1/platform/recharge-rib', authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT setting_value FROM platform_settings WHERE setting_key = $1',
+      ['recharge_rib']
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'RIB non configuré' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        rib: result.rows[0].setting_value,
+      },
+    });
+  } catch (error) {
+    console.error('Erreur récupération RIB:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Modifier le RIB de recharge (réservé aux admins)
+app.put('/api/v1/admin/platform/recharge-rib', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { rib } = req.body;
+
+    if (!rib || rib.trim().length === 0) {
+      return res.status(400).json({ error: 'RIB requis' });
+    }
+
+    // Vérifier le format RIB basique (27 caractères pour un IBAN français)
+    const ribCleaned = rib.replace(/\s/g, '');
+    if (ribCleaned.length < 14) {
+      return res.status(400).json({ error: 'Format de RIB invalide' });
+    }
+
+    // Mettre à jour le RIB
+    await pool.query(
+      `INSERT INTO platform_settings (setting_key, setting_value, updated_by)
+       VALUES ('recharge_rib', $1, $2)
+       ON CONFLICT (setting_key) 
+       DO UPDATE SET setting_value = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP`,
+      [rib, req.userId]
+    );
+
+    res.json({
+      success: true,
+      message: 'RIB de recharge mis à jour avec succès',
+      data: { rib },
+    });
+  } catch (error) {
+    console.error('Erreur mise à jour RIB:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
 
 // ============================================================================
 // DÉMARRAGE DU SERVEUR
