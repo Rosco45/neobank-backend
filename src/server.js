@@ -277,121 +277,148 @@ app.get('/api/v1/accounts/transactions', authenticate, async (req, res) => {
 // CARTES BANCAIRES
 // ============================================================================
 
-// Obtenir toutes les cartes de l'utilisateur
+// Obtenir les cartes de l'utilisateur
 app.get('/api/v1/cards', authenticate, async (req, res) => {
-    try {
-      const result = await pool.query(
-        `SELECT * FROM cards WHERE user_id = $1 ORDER BY created_at DESC`,
-        [req.userId]
-      );
+  try {
+    const result = await pool.query(
+      `SELECT * FROM cards WHERE user_id = $1 ORDER BY created_at DESC`,
+      [req.userId]
+    );
+
+    res.json({
+      success: true,
+      data: result.rows.map((card) => ({
+        id: card.id,
+        cardNumberFull: card.card_number_full || null, // Null si pas encore validé
+        cardNumberLast4: card.card_number_last4,
+        holderName: card.holder_name,
+        cardType: card.card_type,
+        expiryMonth: card.expiry_month,
+        expiryYear: card.expiry_year,
+        dailyLimit: parseFloat(card.daily_limit),
+        monthlyLimit: parseFloat(card.monthly_limit),
+        monthlyFee: parseFloat(card.monthly_fee),
+        cardBalance: parseFloat(card.card_balance || 0),
+        status: card.status,
+        isBlocked: card.is_blocked,
+        createdAt: card.created_at,
+        validatedAt: card.validated_at,
+        rejectionReason: card.rejection_reason,
+      })),
+    });
+  } catch (error) {
+    console.error('Erreur récupération cartes:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
   
-      res.json({
-        success: true,
-        data: result.rows.map(card => ({
-          id: card.id,
-          cardType: card.card_type,
-          cardNumberLast4: card.card_number_last4,
-          holderName: card.holder_name,
-          expiryMonth: card.expiry_month,
-          expiryYear: card.expiry_year,
-          dailyLimit: parseFloat(card.daily_limit),
-          monthlyLimit: parseFloat(card.monthly_limit),
-          isBlocked: card.is_blocked,
-          status: card.status,
-          createdAt: card.created_at,
-        })),
-      });
-    } catch (error) {
-      console.error('Erreur récupération cartes:', error);
-      res.status(500).json({ error: 'Erreur serveur' });
+  // Créer une demande de carte (avec paiement)
+app.post('/api/v1/cards', authenticate, async (req, res) => {
+  try {
+    const { cardType, holderName } = req.body;
+
+    if (!cardType || !holderName) {
+      return res.status(400).json({ error: 'Type de carte et nom requis' });
     }
-  });
-  
-  // Créer une nouvelle carte
-  app.post('/api/v1/cards', authenticate, async (req, res) => {
+
+    // Définir les prix et limites selon le type
+    const cardPrices = {
+      simple: { creation: 50, monthly: 5, dailyLimit: 500, monthlyLimit: 3000 },
+      silver: { creation: 100, monthly: 10, dailyLimit: 2000, monthlyLimit: 10000 },
+      gold: { creation: 150, monthly: 15, dailyLimit: 5000, monthlyLimit: 25000 },
+    };
+
+    const cardConfig = cardPrices[cardType.toLowerCase()];
+    if (!cardConfig) {
+      return res.status(400).json({ error: 'Type de carte invalide' });
+    }
+
+    // Récupérer le compte de l'utilisateur
+    const accountResult = await pool.query(
+      'SELECT * FROM accounts WHERE user_id = $1',
+      [req.userId]
+    );
+
+    if (accountResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Compte non trouvé' });
+    }
+
+    const account = accountResult.rows[0];
+    const totalCost = cardConfig.creation + cardConfig.monthly;
+
+    // Vérifier le solde
+    if (parseFloat(account.balance) < totalCost) {
+      return res.status(400).json({ 
+        error: `Solde insuffisant. Il vous faut ${totalCost.toFixed(2)} € (${cardConfig.creation} € création + ${cardConfig.monthly} € entretien mensuel). Votre solde : ${parseFloat(account.balance).toFixed(2)} €`
+      });
+    }
+
+    await pool.query('BEGIN');
+
     try {
-      const { cardType, holderName } = req.body;
-  
-      if (!cardType || !holderName) {
-        return res.status(400).json({ error: 'Type de carte et nom requis' });
-      }
-  
-      // Vérifier que l'utilisateur a un compte
-      const accountResult = await pool.query(
-        'SELECT id FROM accounts WHERE user_id = $1',
-        [req.userId]
+      // Déduire les frais du compte
+      await pool.query(
+        'UPDATE accounts SET balance = balance - $1 WHERE id = $2',
+        [totalCost, account.id]
       );
-  
-      if (accountResult.rows.length === 0) {
-        return res.status(404).json({ error: 'Compte non trouvé' });
-      }
-  
-      const accountId = accountResult.rows[0].id;
-  
-      // Générer un numéro de carte
-      const cardNumber = '5555' + Math.random().toString().slice(2, 14);
-      const last4 = cardNumber.slice(-4);
-  
-      // Définir les limites selon le type
-      let dailyLimit, monthlyLimit, monthlyFee;
-      switch (cardType) {
-        case 'simple':
-          dailyLimit = 500;
-          monthlyLimit = 3000;
-          monthlyFee = 0;
-          break;
-        case 'silver':
-          dailyLimit = 2000;
-          monthlyLimit = 10000;
-          monthlyFee = 5;
-          break;
-        case 'gold':
-          dailyLimit = 10000;
-          monthlyLimit = 50000;
-          monthlyFee = 15;
-          break;
-        default:
-          return res.status(400).json({ error: 'Type de carte invalide' });
-      }
-  
-      // Date d'expiration (5 ans)
-      const now = new Date();
-      const expiryMonth = now.getMonth() + 1;
-      const expiryYear = now.getFullYear() + 5;
-  
-      // Insérer la carte
-      const result = await pool.query(
-        `INSERT INTO cards (user_id, account_id, card_number_last4, holder_name, card_type, 
-         expiry_month, expiry_year, daily_limit, monthly_limit, monthly_fee, status, is_blocked)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', false)
-         RETURNING *`,
-        [req.userId, accountId, last4, holderName.toUpperCase(), cardType, 
-         expiryMonth, expiryYear, dailyLimit, monthlyLimit, monthlyFee]
+
+      // Créer la transaction de paiement
+      await pool.query(
+        `INSERT INTO transactions (account_id, type, amount, description, status)
+         VALUES ($1, 'card_payment', $2, $3, 'completed')`,
+        [account.id, -totalCost, `Demande carte ${cardType.toUpperCase()} (création + 1er mois)`]
       );
-  
-      const card = result.rows[0];
-  
+
+      // Générer les 4 derniers chiffres
+      const last4 = Math.floor(1000 + Math.random() * 9000).toString();
+
+      // Créer la demande de carte (en attente de validation)
+      const cardResult = await pool.query(
+        `INSERT INTO cards (
+          user_id, account_id, card_number_last4, holder_name, card_type,
+          expiry_month, expiry_year, daily_limit, monthly_limit, monthly_fee,
+          status, creation_fee, card_balance
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, 0.00)
+        RETURNING *`,
+        [
+          req.userId,
+          account.id,
+          last4,
+          holderName.toUpperCase(),
+          cardType.toLowerCase(),
+          12, // Expiration dans 5 ans
+          new Date().getFullYear() + 5,
+          cardConfig.dailyLimit,
+          cardConfig.monthlyLimit,
+          cardConfig.monthly,
+          cardConfig.creation
+        ]
+      );
+
+      await pool.query('COMMIT');
+
       res.status(201).json({
         success: true,
-        message: 'Carte créée avec succès',
+        message: `Demande de carte ${cardType.toUpperCase()} créée avec succès ! En attente de validation par un administrateur.`,
         data: {
-          id: card.id,
-          cardType: card.card_type,
-          cardNumberLast4: card.card_number_last4,
-          holderName: card.holder_name,
-          expiryMonth: card.expiry_month,
-          expiryYear: card.expiry_year,
-          dailyLimit: parseFloat(card.daily_limit),
-          monthlyLimit: parseFloat(card.monthly_limit),
-          monthlyFee: parseFloat(card.monthly_fee),
-          status: card.status,
+          id: cardResult.rows[0].id,
+          cardType: cardResult.rows[0].card_type,
+          last4: cardResult.rows[0].card_number_last4,
+          status: 'pending',
+          amountPaid: totalCost,
         },
       });
+
     } catch (error) {
-      console.error('Erreur création carte:', error);
-      res.status(500).json({ error: 'Erreur serveur' });
+      await pool.query('ROLLBACK');
+      throw error;
     }
-  });
+
+  } catch (error) {
+    console.error('Erreur création carte:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
   
   // Bloquer/Débloquer une carte
   app.put('/api/v1/cards/:id/toggle-block', authenticate, async (req, res) => {
@@ -736,8 +763,8 @@ app.get('/api/v1/loans', authenticate, async (req, res) => {
       }
   
       // Calculer le taux d'intérêt basé sur le montant et la durée
-      let interestRate = 3.5; // Taux de base
-      if (amount > 20000) interestRate = 4.0;
+      let interestRate = 5.0; // Taux de base
+      if (amount > 20000) interestRate = 4.5;
       if (durationMonths > 60) interestRate += 0.5;
   
       // Calculer la mensualité
@@ -1795,6 +1822,187 @@ app.get('/api/v1/admin/users/:id', authenticate, requireAdmin, async (req, res) 
       res.status(500).json({ error: 'Erreur serveur' });
     }
   });
+
+  // ============================================================================
+// ADMINISTRATION DES CARTES
+// ============================================================================
+
+// Obtenir toutes les demandes de cartes en attente
+app.get('/api/v1/admin/cards/pending', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        c.*,
+        u.first_name,
+        u.last_name,
+        u.email,
+        a.balance as account_balance
+      FROM cards c
+      JOIN users u ON c.user_id = u.id
+      JOIN accounts a ON c.account_id = a.id
+      WHERE c.status = 'pending'
+      ORDER BY c.created_at DESC
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows.map(card => ({
+        id: card.id,
+        userId: card.user_id,
+        userName: `${card.first_name} ${card.last_name}`,
+        userEmail: card.email,
+        cardType: card.card_type,
+        holderName: card.holder_name,
+        last4: card.card_number_last4,
+        creationFee: parseFloat(card.creation_fee),
+        monthlyFee: parseFloat(card.monthly_fee),
+        accountBalance: parseFloat(card.account_balance),
+        createdAt: card.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error('Erreur récupération cartes:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Valider une carte et attribuer un numéro
+app.put('/api/v1/admin/cards/:id/approve', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cardNumber } = req.body;
+
+    // Vérifier le format du numéro (16 chiffres)
+    if (!cardNumber || !/^\d{16}$/.test(cardNumber.replace(/\s/g, ''))) {
+      return res.status(400).json({ error: 'Numéro de carte invalide (16 chiffres requis)' });
+    }
+
+    const cleanCardNumber = cardNumber.replace(/\s/g, '');
+
+    // Vérifier que le numéro n'existe pas déjà
+    const existingCard = await pool.query(
+      'SELECT id FROM cards WHERE card_number_full = $1 AND id != $2',
+      [cleanCardNumber, id]
+    );
+
+    if (existingCard.rows.length > 0) {
+      return res.status(400).json({ error: 'Ce numéro de carte existe déjà' });
+    }
+
+    // Mettre à jour la carte
+    await pool.query(
+      `UPDATE cards 
+       SET status = 'active', 
+           card_number_full = $1,
+           validated_by = $2,
+           validated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [cleanCardNumber, req.userId, id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Carte validée et activée avec succès',
+    });
+
+  } catch (error) {
+    console.error('Erreur validation carte:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Rejeter une demande de carte
+app.put('/api/v1/admin/cards/:id/reject', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ error: 'Raison du rejet requise' });
+    }
+
+    await pool.query('BEGIN');
+
+    try {
+      // Récupérer la carte et le compte
+      const cardResult = await pool.query(
+        'SELECT * FROM cards WHERE id = $1',
+        [id]
+      );
+
+      if (cardResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Carte non trouvée' });
+      }
+
+      const card = cardResult.rows[0];
+      const totalPaid = parseFloat(card.creation_fee) + parseFloat(card.monthly_fee);
+
+      // Rembourser l'utilisateur
+      await pool.query(
+        'UPDATE accounts SET balance = balance + $1 WHERE id = $2',
+        [totalPaid, card.account_id]
+      );
+
+      // Créer la transaction de remboursement
+      await pool.query(
+        `INSERT INTO transactions (account_id, type, amount, description, status)
+         VALUES ($1, 'refund', $2, $3, 'completed')`,
+        [card.account_id, totalPaid, `Remboursement demande carte rejetée`]
+      );
+
+      // Mettre à jour le statut de la carte
+      await pool.query(
+        `UPDATE cards 
+         SET status = 'rejected', rejection_reason = $1
+         WHERE id = $2`,
+        [reason, id]
+      );
+
+      await pool.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'Carte rejetée et utilisateur remboursé',
+      });
+
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+
+  } catch (error) {
+    console.error('Erreur rejet carte:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Modifier le numéro d'une carte existante
+app.put('/api/v1/admin/cards/:id/number', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cardNumber } = req.body;
+
+    if (!cardNumber || !/^\d{16}$/.test(cardNumber.replace(/\s/g, ''))) {
+      return res.status(400).json({ error: 'Numéro de carte invalide' });
+    }
+
+    const cleanCardNumber = cardNumber.replace(/\s/g, '');
+
+    await pool.query(
+      'UPDATE cards SET card_number_full = $1 WHERE id = $2',
+      [cleanCardNumber, id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Numéro de carte modifié avec succès',
+    });
+
+  } catch (error) {
+    console.error('Erreur modification numéro:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
   // ============================================================================
 // GESTION DU RIB DE RECHARGE
 // ============================================================================
