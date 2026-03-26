@@ -281,67 +281,37 @@ app.get('/api/v1/accounts/transactions', authenticate, async (req, res) => {
 app.get('/api/v1/cards', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT 
-        id,
-        user_id,
-        account_id,
-        card_number_last4,
-        card_number_full,
-        holder_name,
-        card_type,
-        expiry_month,
-        expiry_year,
-        daily_limit,
-        monthly_limit,
-        monthly_fee,
-        card_balance,
-        status,
-        is_blocked,
-        created_at,
-        validated_at,
-        rejection_reason
-      FROM cards 
-      WHERE user_id = $1 
-      ORDER BY created_at DESC`,
+      `SELECT * FROM cards WHERE user_id = $1 ORDER BY created_at DESC`,
       [req.userId]
     );
 
     console.log('=== DEBUG CARDS ===');
-    console.log('User ID:', req.userId);
     console.log('Nombre de cartes:', result.rows.length);
     
     if (result.rows.length > 0) {
-      console.log('Première carte:');
-      console.log('  - ID:', result.rows[0].id);
-      console.log('  - card_number_full (DB):', result.rows[0].card_number_full);
-      console.log('  - card_number_last4:', result.rows[0].card_number_last4);
-      console.log('  - status:', result.rows[0].status);
+      console.log('Première carte - card_number_full:', result.rows[0].card_number_full);
     }
 
-    const cardsData = result.rows.map((card) => {
-      const cardData = {
-        id: card.id,
-        cardNumberFull: card.card_number_full,  // ← Ligne critique
-        cardNumberLast4: card.card_number_last4,
-        holderName: card.holder_name,
-        cardType: card.card_type,
-        expiryMonth: card.expiry_month,
-        expiryYear: card.expiry_year,
-        dailyLimit: parseFloat(card.daily_limit || 0),
-        monthlyLimit: parseFloat(card.monthly_limit || 0),
-        monthlyFee: parseFloat(card.monthly_fee || 0),
-        cardBalance: parseFloat(card.card_balance || 0),
-        status: card.status,
-        isBlocked: card.is_blocked,
-        createdAt: card.created_at,
-        validatedAt: card.validated_at,
-        rejectionReason: card.rejection_reason,
-      };
-      
-      console.log('Carte transformée:', cardData.id, 'cardNumberFull:', cardData.cardNumberFull);
-      
-      return cardData;
-    });
+    const cardsData = result.rows.map((card) => ({
+      id: card.id,
+      // ⚠️ FORCE UN NUMÉRO POUR TESTER
+      cardNumberFull: '1234567890123456', // ← LIGNE DE TEST
+      // cardNumberFull: card.card_number_full,  // ← Ligne originale commentée
+      cardNumberLast4: card.card_number_last4,
+      holderName: card.holder_name,
+      cardType: card.card_type,
+      expiryMonth: card.expiry_month,
+      expiryYear: card.expiry_year,
+      dailyLimit: parseFloat(card.daily_limit || 0),
+      monthlyLimit: parseFloat(card.monthly_limit || 0),
+      monthlyFee: parseFloat(card.monthly_fee || 0),
+      cardBalance: parseFloat(card.card_balance || 0),
+      status: card.status,
+      isBlocked: card.is_blocked,
+      createdAt: card.created_at,
+      validatedAt: card.validated_at,
+      rejectionReason: card.rejection_reason,
+    }));
 
     res.json({
       success: true,
