@@ -281,7 +281,7 @@ app.get('/api/v1/accounts/transactions', authenticate, async (req, res) => {
 app.get('/api/v1/cards', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM cards WHERE user_id = 1 ORDER BY created_at DESC`,
+      `SELECT * FROM cards WHERE user_id = $1 ORDER BY created_at DESC`,
       [req.userId]
     );
 
