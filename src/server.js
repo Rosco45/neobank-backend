@@ -295,8 +295,8 @@ app.get('/api/v1/cards', authenticate, async (req, res) => {
     const cardsData = result.rows.map((card) => ({
       id: card.id,
       // ⚠️ FORCE UN NUMÉRO POUR TESTER
-      cardNumberFull: '1234567890123456', // ← LIGNE DE TEST
-      // cardNumberFull: card.card_number_full,  // ← Ligne originale commentée
+      //cardNumberFull: '1234567890123456', // ← LIGNE DE TEST
+      cardNumberFull: card.card_number_full,  // ← Ligne originale commentée
       cardNumberLast4: card.card_number_last4,
       holderName: card.holder_name,
       cardType: card.card_type,
